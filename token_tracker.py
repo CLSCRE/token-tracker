@@ -541,13 +541,41 @@ def _ftime(iso):
 
 
 def _project_label(name):
-    """Make project dir names more readable."""
-    # C--Users-tdamy-OneDrive---CLS-CRE-... → last meaningful segment
-    parts = name.replace("---", "/").replace("--", "/").split("/")
-    # Take last 2-3 non-empty parts
-    parts = [p.strip("-") for p in parts if p.strip("-")]
-    if len(parts) > 2:
-        return "/".join(parts[-2:])
+    """Make project dir names more readable.
+
+    Converts encoded paths like
+      C--Users-tdamy-OneDrive---CLS-CRE-CLS-CRE-Brokerage-AI---ChatGPT-Claude-Code-Lender-Scraper
+    into clean names like "Lender Scraper".
+    """
+    if not name:
+        return "Unknown"
+
+    import re
+
+    # Claude Code encodes paths: / → -- and space → -
+    # Split on --- (original triple-hyphen or deeper separators) first
+    segments = name.split("---")
+    # Take the last segment (the project folder name)
+    last = segments[-1].strip("-")
+
+    # If the last segment still has -- separators (subfolder encoding), take last part
+    if "--" in last:
+        sub_parts = last.split("--")
+        last = sub_parts[-1].strip("-")
+
+    # Strip common path prefixes that aren't meaningful project names
+    # e.g. "ChatGPT-Claude-Code-Lender-Scraper" → "Lender-Scraper"
+    last = re.sub(r'^(?:ChatGPT-)?Claude-Code-', '', last)
+
+    # Convert remaining single hyphens to spaces for readability
+    label = last.replace("-", " ").strip()
+
+    # Title-case it for display, then fix known acronyms (whole words only)
+    if label:
+        result = label.title()
+        for acronym in ("Hbu", "La", "Ai", "Api", "Cre", "Cls"):
+            result = re.sub(r'\b' + acronym + r'\b', acronym.upper(), result)
+        return result
     return name
 
 
@@ -735,6 +763,7 @@ examples:
   %(prog)s --json                   Output machine-readable JSON
   %(prog)s --html                   Open interactive dashboard in browser
   %(prog)s --watch                  Live dashboard (auto-refreshes every 30s)
+  %(prog)s --publish                Generate docs/index.html for GitHub Pages
 """,
     )
     parser.add_argument("-s", "--session",       help="Analyze a specific session by UUID")
@@ -746,6 +775,7 @@ examples:
     parser.add_argument("--json",                action="store_true", help="Output as JSON")
     parser.add_argument("--html",                action="store_true", help="Open interactive dashboard in browser")
     parser.add_argument("--watch",               action="store_true", help="Live dashboard with auto-refresh (implies --html)")
+    parser.add_argument("--publish",             action="store_true", help="Generate docs/index.html for GitHub Pages")
     parser.add_argument("--no-color",            action="store_true", help="Disable colored output")
     args = parser.parse_args()
 
@@ -813,7 +843,9 @@ examples:
         data = parse_session(fp)
         analysis = analyze_session(data)
 
-        if args.html:
+        if args.publish:
+            _publish_html([analysis])
+        elif args.html:
             _generate_html([analysis])
         elif args.json:
             _print_json([analysis])
@@ -848,6 +880,10 @@ examples:
 
     if not analyses:
         print("No sessions with API calls found.")
+        return
+
+    if args.publish:
+        _publish_html(analyses)
         return
 
     if args.html:
@@ -896,7 +932,7 @@ _HTML_TEMPLATE = r'''<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Claude Code Token Tracker</title>
+<title>Token Tracker</title>
 <style>
   :root {
     --bg: #0d1117; --bg2: #161b22; --bg3: #21262d; --border: #30363d;
@@ -904,155 +940,366 @@ _HTML_TEMPLATE = r'''<!DOCTYPE html>
     --red: #f85149; --blue: #58a6ff; --purple: #bc8cff; --cyan: #39d2c0;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; padding: 24px; }
-  h1 { font-size: 24px; font-weight: 600; margin-bottom: 4px; }
-  .subtitle { color: var(--dim); font-size: 14px; margin-bottom: 24px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 32px; }
-  .card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
-  .card-label { color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
-  .card-value { font-size: 28px; font-weight: 700; }
-  .card-detail { color: var(--dim); font-size: 13px; margin-top: 4px; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; }
+
+  /* Header */
+  .header { padding: 24px 32px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
+  .header-left h1 { font-size: 20px; font-weight: 600; }
+  .header-left .date-range { color: var(--dim); font-size: 13px; margin-top: 2px; }
+  .header-right .total-spend { font-size: 36px; font-weight: 700; color: var(--green); }
+
+  .content { padding: 24px 32px; max-width: 1200px; }
+
+  /* Summary cards */
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 32px; }
+  .card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; }
+  .card-label { color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+  .card-value { font-size: 24px; font-weight: 700; }
+  .card-detail { color: var(--dim); font-size: 12px; margin-top: 4px; }
   .cost { color: var(--green); }
+
+  /* Sections */
   .section { margin-bottom: 32px; }
-  .section-title { font-size: 18px; font-weight: 600; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  .section-title { font-size: 16px; font-weight: 600; margin-bottom: 14px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+
+  /* Tables */
   table { width: 100%; border-collapse: collapse; background: var(--bg2); border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
-  th { background: var(--bg3); color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; padding: 12px 16px; text-align: left; font-weight: 600; }
+  th { background: var(--bg3); color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; padding: 10px 16px; text-align: left; font-weight: 600; }
   th.right, td.right { text-align: right; }
-  td { padding: 12px 16px; border-top: 1px solid var(--border); font-size: 14px; }
+  td { padding: 10px 16px; border-top: 1px solid var(--border); font-size: 14px; }
   tr:hover td { background: rgba(56, 139, 253, 0.04); }
-  .bar-container { display: flex; align-items: center; gap: 8px; }
-  .bar { height: 8px; border-radius: 4px; background: var(--blue); min-width: 2px; }
-  .bar-label { font-size: 12px; color: var(--dim); white-space: nowrap; }
-  .tool-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
-  .tool-chip { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
-  .tool-chip .count { font-weight: 700; color: var(--blue); }
-  .tool-chip .errors { color: var(--red); font-size: 11px; margin-left: 4px; }
-  .session-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 16px; cursor: pointer; transition: border-color 0.2s; }
-  .session-card:hover { border-color: var(--blue); }
-  .session-card.active { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); }
-  .session-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
-  .session-id { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 13px; color: var(--blue); }
-  .session-project { font-size: 13px; color: var(--dim); margin-top: 2px; }
-  .session-cost { font-size: 22px; font-weight: 700; color: var(--green); }
-  .session-meta { display: flex; gap: 16px; font-size: 13px; color: var(--dim); flex-wrap: wrap; }
-  .session-meta span { display: flex; align-items: center; gap: 4px; }
-  .detail-panel { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin-bottom: 32px; display: none; }
-  .detail-panel.visible { display: block; }
-  .token-breakdown { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
-  .token-item { background: var(--bg3); border-radius: 6px; padding: 12px; }
-  .token-item .label { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; }
-  .token-item .value { font-size: 18px; font-weight: 600; margin-top: 4px; }
+
+  /* Project bar */
+  .bar-cell { width: 40%; }
+  .bar-wrap { display: flex; align-items: center; gap: 8px; }
+  .bar { height: 10px; border-radius: 5px; min-width: 3px; transition: width 0.3s; }
+  .bar-pct { font-size: 11px; color: var(--dim); white-space: nowrap; }
+
+  /* Color classes for cost */
+  .cost-green { color: var(--green); }
+  .cost-yellow { color: var(--yellow); }
+  .cost-red { color: var(--red); }
+
+  /* Recommendations */
   .rec-item { padding: 12px 16px; border-left: 3px solid; margin-bottom: 8px; background: var(--bg3); border-radius: 0 6px 6px 0; }
   .rec-item.high { border-color: var(--red); }
   .rec-item.medium { border-color: var(--yellow); }
   .rec-item.low { border-color: var(--dim); }
   .rec-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
   .rec-detail { font-size: 13px; color: var(--dim); }
+  .no-recs { color: var(--green); font-size: 14px; padding: 12px 0; }
+
+  /* Collapsible session detail */
+  .toggle-btn { background: var(--bg3); border: 1px solid var(--border); color: var(--text); padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 14px; margin-bottom: 16px; }
+  .toggle-btn:hover { border-color: var(--blue); }
+  .collapsible { display: none; }
+  .collapsible.open { display: block; }
+  .session-id { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px; color: var(--blue); }
   .timestamp { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px; }
-  @media (max-width: 768px) { body { padding: 12px; } .grid { grid-template-columns: 1fr 1fr; } }
+
+  /* Timeline tab bar */
+  .tab-bar { display: flex; gap: 4px; margin-bottom: 14px; }
+  .tab-btn { background: var(--bg3); border: 1px solid var(--border); color: var(--dim); padding: 6px 18px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.15s; }
+  .tab-btn:hover { color: var(--text); border-color: var(--blue); }
+  .tab-btn.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+
+  @media (max-width: 768px) {
+    .content { padding: 16px; }
+    .header { padding: 16px; }
+    .grid { grid-template-columns: 1fr 1fr; }
+    .bar-cell { width: 30%; }
+  }
 </style>
 </head>
 <body>
-<h1>Claude Code Token Tracker</h1>
-<p class="subtitle">Generated <span id="gen-time"></span></p>
-<div class="grid" id="summary-cards"></div>
-<div class="section">
-  <div class="section-title">Sessions by Cost</div>
-  <div id="sessions-list"></div>
+
+<div class="header">
+  <div class="header-left">
+    <h1>Token Tracker</h1>
+    <div class="date-range" id="date-range"></div>
+    <div class="date-range" id="last-refreshed"></div>
+  </div>
+  <div class="header-right">
+    <div class="total-spend" id="total-spend"></div>
+  </div>
 </div>
-<div class="detail-panel" id="detail-panel">
-  <div class="section-title" id="detail-title">Session Detail</div>
-  <div class="token-breakdown" id="detail-tokens"></div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:20px">
-    <div>
-      <h3 style="font-size:14px;margin-bottom:12px;color:var(--dim)">Tool Usage</h3>
-      <div class="tool-grid" id="detail-tools"></div>
+
+<div class="content">
+  <!-- Summary cards -->
+  <div class="grid" id="summary-cards"></div>
+
+  <!-- Spending by Project (hero section) -->
+  <div class="section">
+    <div class="section-title">Spending by Project</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Project</th>
+          <th class="right">Spend</th>
+          <th class="right">Sessions</th>
+          <th class="right">Messages</th>
+          <th class="bar-cell"></th>
+        </tr>
+      </thead>
+      <tbody id="project-table"></tbody>
+    </table>
+  </div>
+
+  <!-- Spending Timeline -->
+  <div class="section">
+    <div class="section-title">Spending Timeline</div>
+    <div class="tab-bar">
+      <button class="tab-btn active" onclick="setTimelineMode('daily')">Daily</button>
+      <button class="tab-btn" onclick="setTimelineMode('weekly')">Weekly</button>
+      <button class="tab-btn" onclick="setTimelineMode('monthly')">Monthly</button>
     </div>
-    <div>
-      <h3 style="font-size:14px;margin-bottom:12px;color:var(--dim)">Recommendations</h3>
-      <div id="detail-recs"></div>
+    <table>
+      <thead>
+        <tr><th id="timeline-col-header">Date</th><th class="right">Spend</th><th class="right">Sessions</th><th class="bar-cell"></th></tr>
+      </thead>
+      <tbody id="timeline-table"></tbody>
+    </table>
+  </div>
+
+  <!-- Recommendations -->
+  <div class="section">
+    <div class="section-title">Top Recommendations</div>
+    <div id="recommendations"></div>
+  </div>
+
+  <!-- Session Detail (collapsible) -->
+  <div class="section">
+    <button class="toggle-btn" onclick="toggleSessions()">Show Session Details</button>
+    <div class="collapsible" id="session-detail">
+      <table>
+        <thead>
+          <tr>
+            <th>Project</th><th>Time</th><th class="right">Cost</th>
+            <th>Model</th><th class="right">Messages</th><th class="right">Tools</th>
+            <th class="right">Errors</th>
+          </tr>
+        </thead>
+        <tbody id="sessions-table"></tbody>
+      </table>
     </div>
   </div>
-  <div id="detail-issues"></div>
 </div>
-<div class="section">
-  <div class="section-title">All Sessions</div>
-  <table>
-    <thead>
-      <tr>
-        <th>Session</th><th>Project</th><th class="right">Cost</th>
-        <th class="right">API Calls</th><th class="right">Tool Calls</th>
-        <th class="right">Errors</th><th class="right">Output Tokens</th><th>Time</th>
-      </tr>
-    </thead>
-    <tbody id="sessions-table"></tbody>
-  </table>
-</div>
+
 <script>
 const DATA = %%DATA%%;
-function fc(c){return c<0.01?'$'+c.toFixed(4):'$'+c.toFixed(2)}
-function ft(n){if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(1)+'K';return String(n)}
-function ftime(iso){if(!iso)return'\u2014';const d=new Date(iso);return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}
-function projectLabel(name){const parts=name.replace(/---/g,'/').replace(/--/g,'/').split('/').filter(p=>p.replace(/-/g,''));return parts.length>2?parts.slice(-2).join('/'):name}
-DATA.sort((a,b)=>b.total_cost-a.total_cost);
-const totalCost=DATA.reduce((s,d)=>s+d.total_cost,0);
-const totalAPI=DATA.reduce((s,d)=>s+d.num_api_calls,0);
-const totalTools=DATA.reduce((s,d)=>s+d.num_tool_calls,0);
-const totalOut=DATA.reduce((s,d)=>s+d.total_output_tokens,0);
-const totalCacheRead=DATA.reduce((s,d)=>s+d.total_cache_read_tokens,0);
-const totalErrors=DATA.reduce((s,d)=>s+d.tool_errors.length,0);
-document.getElementById('gen-time').textContent=new Date().toLocaleString();
-document.getElementById('summary-cards').innerHTML=[
-  {label:'Total Cost',value:fc(totalCost),cls:'cost',detail:DATA.length+' sessions'},
-  {label:'API Calls',value:totalAPI.toLocaleString(),detail:(totalAPI/DATA.length).toFixed(0)+' avg/session'},
-  {label:'Tool Calls',value:totalTools.toLocaleString(),detail:totalErrors+' errors ('+(totalTools?(100*totalErrors/totalTools).toFixed(0):0)+'%)'},
-  {label:'Output Tokens',value:ft(totalOut),detail:fc(totalOut/1e6*25)+' at Opus rates'},
-  {label:'Cache Read',value:ft(totalCacheRead),detail:'Saved ~'+fc(totalCacheRead/1e6*5*0.9)+' vs uncached'},
+
+/* ── Helpers ── */
+function fc(c){ return c<0.01 ? '$'+c.toFixed(4) : '$'+c.toFixed(2); }
+function ft(n){ if(n>=1e6) return (n/1e6).toFixed(1)+'M'; if(n>=1e3) return (n/1e3).toFixed(1)+'K'; return String(n); }
+function ftime(iso){ if(!iso) return '\u2014'; const d=new Date(iso); return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); }
+function fdate(iso){ if(!iso) return '\u2014'; return iso.slice(0,10); }
+function costColor(c){ return c>20?'cost-red':c>5?'cost-yellow':'cost-green'; }
+function barColor(c){ return c>20?'var(--red)':c>5?'var(--yellow)':'var(--green)'; }
+
+function projectLabel(name){
+  if(!name) return 'Unknown';
+  const segs = name.split('---');
+  let last = segs[segs.length-1].replace(/^-+|-+$/g,'');
+  if(last.includes('--')){
+    const sub = last.split('--');
+    last = sub[sub.length-1].replace(/^-+|-+$/g,'');
+  }
+  last = last.replace(/^(?:ChatGPT-)?Claude-Code-/,'');
+  let label = last.replace(/-/g,' ').trim();
+  if(!label) return name;
+  label = label.replace(/\b\w/g, c=>c.toUpperCase());
+  ['Hbu','La','Ai','Api','Cre','Cls'].forEach(a=>{
+    label = label.replace(new RegExp('\\b'+a+'\\b','g'), a.toUpperCase());
+  });
+  return label;
+}
+
+/* ── Aggregate by project ── */
+const projMap = {};
+DATA.forEach(s => {
+  const name = projectLabel(s.project||'');
+  if(!projMap[name]) projMap[name] = { cost:0, sessions:0, messages:0, errors:0 };
+  projMap[name].cost += s.total_cost;
+  projMap[name].sessions += 1;
+  projMap[name].messages += s.num_user_messages || 0;
+  projMap[name].errors += (s.tool_errors||[]).length;
+});
+const projects = Object.entries(projMap).map(([name,d])=>({name,...d})).sort((a,b)=>b.cost-a.cost);
+const maxProjCost = projects[0]?.cost || 1;
+
+/* ── Timeline aggregation functions ── */
+let timelineMode = 'daily';
+
+function aggregateDaily(){
+  const map = {};
+  DATA.forEach(s => {
+    const day = fdate(s.start_time);
+    if(day==='\u2014') return;
+    if(!map[day]) map[day] = { label:day, cost:0, sessions:0 };
+    map[day].cost += s.total_cost;
+    map[day].sessions += 1;
+  });
+  return Object.values(map).sort((a,b)=>a.label.localeCompare(b.label));
+}
+
+function aggregateWeekly(){
+  const map = {};
+  DATA.forEach(s => {
+    if(!s.start_time) return;
+    const d = new Date(s.start_time);
+    // ISO week number
+    const tmp = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    tmp.setUTCDate(tmp.getUTCDate() + 4 - (tmp.getUTCDay() || 7));
+    const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1));
+    const weekNum = Math.ceil((((tmp - yearStart) / 86400000) + 1) / 7);
+    const key = tmp.getUTCFullYear() + '-W' + String(weekNum).padStart(2,'0');
+    if(!map[key]) map[key] = { label:key, cost:0, sessions:0 };
+    map[key].cost += s.total_cost;
+    map[key].sessions += 1;
+  });
+  return Object.values(map).sort((a,b)=>a.label.localeCompare(b.label));
+}
+
+function aggregateMonthly(){
+  const map = {};
+  DATA.forEach(s => {
+    if(!s.start_time) return;
+    const key = s.start_time.slice(0,7); // YYYY-MM
+    if(!map[key]) map[key] = { label:key, cost:0, sessions:0 };
+    map[key].cost += s.total_cost;
+    map[key].sessions += 1;
+  });
+  return Object.values(map).sort((a,b)=>a.label.localeCompare(b.label));
+}
+
+function renderTimeline(){
+  const headers = { daily:'Date', weekly:'Week', monthly:'Month' };
+  document.getElementById('timeline-col-header').textContent = headers[timelineMode] || 'Date';
+  const rows = timelineMode==='weekly' ? aggregateWeekly() : timelineMode==='monthly' ? aggregateMonthly() : aggregateDaily();
+  const maxCost = Math.max(...rows.map(r=>r.cost), 1);
+  document.getElementById('timeline-table').innerHTML = rows.map(r=>{
+    const pct = ((r.cost/maxCost)*100).toFixed(0);
+    return `<tr><td class="timestamp">${r.label}</td><td class="right ${costColor(r.cost)}" style="font-weight:600">${fc(r.cost)}</td><td class="right">${r.sessions}</td><td class="bar-cell"><div class="bar-wrap"><div class="bar" style="width:${pct}%;background:${barColor(r.cost)}"></div></div></td></tr>`;
+  }).join('');
+}
+
+function setTimelineMode(mode){
+  timelineMode = mode;
+  document.querySelectorAll('.tab-bar .tab-btn').forEach(btn=>{
+    btn.classList.toggle('active', btn.textContent.toLowerCase() === mode);
+  });
+  renderTimeline();
+}
+
+/* ── Totals ── */
+const totalCost = DATA.reduce((s,d)=>s+d.total_cost,0);
+const totalSessions = DATA.length;
+const totalMessages = DATA.reduce((s,d)=>s+(d.num_user_messages||0),0);
+const avgCost = totalSessions ? totalCost/totalSessions : 0;
+
+/* ── Today's spend ── */
+const today = new Date().toISOString().slice(0,10);
+const todaySpend = DATA.filter(s=>(s.start_time||'').startsWith(today)).reduce((s,d)=>s+d.total_cost,0);
+
+/* ── Date range ── */
+const dates = DATA.map(s=>s.start_time).filter(Boolean).sort();
+const dateRange = dates.length ? fdate(dates[0]) + ' to ' + fdate(dates[dates.length-1]) : '';
+
+/* ── Render header ── */
+document.getElementById('total-spend').textContent = fc(totalCost);
+document.getElementById('date-range').textContent = dateRange;
+document.getElementById('last-refreshed').textContent = 'Last refreshed: ' + new Date().toLocaleString();
+
+/* ── Summary cards ── */
+document.getElementById('summary-cards').innerHTML = [
+  { label:'Total Spend', value:fc(totalCost), cls:'cost', detail:totalSessions+' sessions' },
+  { label:"Today's Spend", value:fc(todaySpend), cls:todaySpend>10?'cost-red':todaySpend>3?'cost-yellow':'cost-green', detail:today },
+  { label:'Messages Sent', value:totalMessages.toLocaleString(), detail:(totalSessions?(totalMessages/totalSessions).toFixed(0):'0')+' avg/session' },
+  { label:'Avg Cost/Session', value:fc(avgCost), cls:avgCost>10?'cost-red':avgCost>5?'cost-yellow':'cost-green', detail:'across '+totalSessions+' sessions' },
 ].map(c=>`<div class="card"><div class="card-label">${c.label}</div><div class="card-value ${c.cls||''}">${c.value}</div><div class="card-detail">${c.detail}</div></div>`).join('');
-const maxCost=DATA[0]?.total_cost||1;
-document.getElementById('sessions-list').innerHTML=DATA.map((s,i)=>{
-  const errs=s.tool_errors.length;const pct=((s.total_cost/maxCost)*100).toFixed(0);
-  return`<div class="session-card" onclick="showDetail(${i})" id="scard-${i}">
-    <div class="session-header"><div><div class="session-id">${s.session_id?.slice(0,8)||'?'}...</div><div class="session-project">${projectLabel(s.project||'?')}</div></div><div class="session-cost">${fc(s.total_cost)}</div></div>
-    <div style="margin-bottom:8px"><div class="bar-container"><div class="bar" style="width:${pct}%;background:${s.total_cost>5?'var(--red)':s.total_cost>1?'var(--yellow)':'var(--green)'}"></div><span class="bar-label">${ft(s.total_output_tokens)} output</span></div></div>
-    <div class="session-meta"><span>${s.num_api_calls} API calls</span><span>${s.num_tool_calls} tools</span>${errs?'<span style="color:var(--red)">'+errs+' errors</span>':''}<span class="timestamp">${ftime(s.start_time)}</span></div>
-  </div>`}).join('');
-document.getElementById('sessions-table').innerHTML=DATA.map(s=>{
-  const errs=s.tool_errors.length;
-  return`<tr><td><span class="session-id">${s.session_id?.slice(0,12)||'?'}...</span></td><td style="color:var(--dim);font-size:13px">${projectLabel(s.project||'?')}</td><td class="right cost">${fc(s.total_cost)}</td><td class="right">${s.num_api_calls}</td><td class="right">${s.num_tool_calls}</td><td class="right" style="color:${errs?'var(--red)':'var(--dim)'}">${errs}</td><td class="right">${ft(s.total_output_tokens)}</td><td class="timestamp">${ftime(s.start_time)}</td></tr>`}).join('');
-function showDetail(idx){
-  document.querySelectorAll('.session-card').forEach(c=>c.classList.remove('active'));
-  document.getElementById('scard-'+idx).classList.add('active');
-  const s=DATA[idx];const panel=document.getElementById('detail-panel');
-  panel.classList.add('visible');panel.scrollIntoView({behavior:'smooth',block:'nearest'});
-  document.getElementById('detail-title').innerHTML='Session: <span class="session-id">'+(s.session_id||'?')+'</span> <span style="color:var(--dim);font-size:14px;font-weight:400"> \u2014 '+projectLabel(s.project||'?')+'</span>';
-  document.getElementById('detail-tokens').innerHTML=[
-    {label:'Input (non-cached)',value:ft(s.total_input_tokens)},{label:'Cache Write',value:ft(s.total_cache_write_tokens)},
-    {label:'Cache Read',value:ft(s.total_cache_read_tokens)},{label:'Output',value:ft(s.total_output_tokens)},
-    {label:'Total Cost',value:fc(s.total_cost),cls:'cost'},
-  ].map(t=>`<div class="token-item"><div class="label">${t.label}</div><div class="value ${t.cls||''}">${t.value}</div></div>`).join('');
-  const counts=s.tool_call_counts||{};const errNames={};
-  (s.tool_errors||[]).forEach(e=>{errNames[e.name]=(errNames[e.name]||0)+1});
-  const sorted=Object.entries(counts).sort((a,b)=>b[1]-a[1]);
-  document.getElementById('detail-tools').innerHTML=sorted.map(([name,cnt])=>{
-    const e=errNames[name]||0;
-    return`<div class="tool-chip"><span>${name}</span><span><span class="count">${cnt}</span>${e?'<span class="errors"> '+e+' err</span>':''}</span></div>`}).join('')||'<span style="color:var(--dim)">No tool calls</span>';
-  const recs=generateRecs(s);
-  document.getElementById('detail-recs').innerHTML=recs.length?recs.map(r=>`<div class="rec-item ${r.severity}"><div class="rec-title">${r.title}</div><div class="rec-detail">${r.detail}</div></div>`).join(''):'<span style="color:var(--green)">No issues found</span>';
-  let issues='';
-  if(s.duplicate_tools?.length){issues+='<h3 style="font-size:14px;margin:12px 0 8px;color:var(--yellow)">Duplicate Tool Calls</h3>';issues+=s.duplicate_tools.map(d=>`<div style="font-size:13px;color:var(--dim);margin-bottom:4px">${d.tool} x${d.count}</div>`).join('')}
-  if(s.large_results?.length){issues+='<h3 style="font-size:14px;margin:12px 0 8px;color:var(--yellow)">Large Results (>10K chars)</h3>';issues+=s.large_results.sort((a,b)=>b.result_size-a.result_size).slice(0,5).map(r=>`<div style="font-size:13px;color:var(--dim);margin-bottom:4px">${r.name}: ${r.result_size.toLocaleString()} chars${r.is_error?' <span style="color:var(--red)">(error)</span>':''}</div>`).join('')}
-  document.getElementById('detail-issues').innerHTML=issues}
-function generateRecs(s){
-  const recs=[];
-  (s.duplicate_tools||[]).forEach(d=>{recs.push({severity:'high',title:`Duplicate ${d.tool} calls (${d.count}x)`,detail:`Same input sent ${d.count} times \u2014 wastes tokens and round-trips.`})});
-  const nErr=(s.tool_errors||[]).length,nTool=s.num_tool_calls;
-  if(nTool>2&&nErr/nTool>0.10){recs.push({severity:'high',title:`High error rate (${nErr}/${nTool} = ${(100*nErr/nTool).toFixed(0)}%)`,detail:'Each error forces a retry, doubling token spend.'})}
-  (s.large_results||[]).sort((a,b)=>b.result_size-a.result_size).slice(0,3).forEach(r=>{recs.push({severity:'medium',title:`Large ${r.name} result (${r.result_size.toLocaleString()} chars)`,detail:'Inflates input tokens on subsequent turns.'})});
-  if(s.num_api_calls>25){recs.push({severity:'low',title:`Many API round-trips (${s.num_api_calls})`,detail:'Consider batching instructions to reduce calls.'})}
-  return recs}
-const currentIdx=DATA.findIndex(s=>s.project?.includes('Token-Tracker'));
-if(currentIdx>=0)showDetail(currentIdx);
+
+/* ── Project table ── */
+document.getElementById('project-table').innerHTML = projects.map(p=>{
+  const pct = ((p.cost/maxProjCost)*100).toFixed(0);
+  return `<tr>
+    <td><strong>${p.name}</strong></td>
+    <td class="right ${costColor(p.cost)}" style="font-weight:600">${fc(p.cost)}</td>
+    <td class="right">${p.sessions}</td>
+    <td class="right">${p.messages}</td>
+    <td class="bar-cell"><div class="bar-wrap"><div class="bar" style="width:${pct}%;background:${barColor(p.cost)}"></div><span class="bar-pct">${((p.cost/totalCost)*100).toFixed(0)}%</span></div></td>
+  </tr>`;
+}).join('');
+
+/* ── Timeline table (initial render) ── */
+renderTimeline();
+
+/* ── Recommendations (aggregated across all sessions) ── */
+function generateAllRecs(){
+  const recs = [];
+  const dupMap = {};
+  DATA.forEach(s=>{
+    (s.duplicate_tools||[]).forEach(d=>{
+      const key = d.tool;
+      if(!dupMap[key]) dupMap[key] = 0;
+      dupMap[key] += d.count;
+    });
+  });
+  Object.entries(dupMap).sort((a,b)=>b[1]-a[1]).slice(0,3).forEach(([tool,count])=>{
+    recs.push({ severity:'high', title:'Repeated '+tool+' calls ('+count+'x across sessions)', detail:'Identical inputs sent multiple times. Each duplicate wastes tokens and API round-trips.' });
+  });
+
+  const totalErrors = DATA.reduce((s,d)=>s+(d.tool_errors||[]).length,0);
+  const totalTools = DATA.reduce((s,d)=>s+d.num_tool_calls,0);
+  if(totalTools>10 && totalErrors/totalTools>0.08){
+    recs.push({ severity:'high', title:'High tool error rate ('+totalErrors+'/'+totalTools+' = '+(100*totalErrors/totalTools).toFixed(0)+'%)', detail:'Errors force retries, roughly doubling token spend per failed call.' });
+  }
+
+  const bigResults = [];
+  DATA.forEach(s=>{ (s.large_results||[]).forEach(r=>bigResults.push(r)); });
+  bigResults.sort((a,b)=>b.result_size-a.result_size).slice(0,3).forEach(r=>{
+    recs.push({ severity:'medium', title:'Large '+r.name+' result ('+(r.result_size||0).toLocaleString()+' chars)', detail:'Oversized results inflate input tokens on every subsequent message.' });
+  });
+
+  const highCostSessions = DATA.filter(s=>s.total_cost>10);
+  if(highCostSessions.length>0){
+    recs.push({ severity:'medium', title:highCostSessions.length+' session'+(highCostSessions.length>1?'s':'')+' over $10', detail:'Consider breaking complex tasks into smaller sessions to control spend.' });
+  }
+
+  const highRoundTrips = DATA.filter(s=>s.num_api_calls>30);
+  if(highRoundTrips.length>0){
+    recs.push({ severity:'low', title:highRoundTrips.length+' session'+(highRoundTrips.length>1?'s':'')+' with 30+ API round-trips', detail:'Batch instructions together to reduce back-and-forth.' });
+  }
+
+  return recs;
+}
+
+const allRecs = generateAllRecs();
+document.getElementById('recommendations').innerHTML = allRecs.length
+  ? allRecs.map(r=>`<div class="rec-item ${r.severity}"><div class="rec-title">${r.title}</div><div class="rec-detail">${r.detail}</div></div>`).join('')
+  : '<div class="no-recs">Looking good! No optimization issues found.</div>';
+
+/* ── Session detail table ── */
+DATA.sort((a,b)=>b.total_cost-a.total_cost);
+document.getElementById('sessions-table').innerHTML = DATA.map(s=>{
+  const errs = (s.tool_errors||[]).length;
+  const models = (s.models||[]).join(', ') || '?';
+  return `<tr>
+    <td>${projectLabel(s.project||'')}</td>
+    <td class="timestamp">${ftime(s.start_time)}</td>
+    <td class="right ${costColor(s.total_cost)}" style="font-weight:600">${fc(s.total_cost)}</td>
+    <td style="font-size:13px;color:var(--dim)">${models}</td>
+    <td class="right">${s.num_user_messages||0}</td>
+    <td class="right">${s.num_tool_calls}</td>
+    <td class="right" style="color:${errs?'var(--red)':'var(--dim)'}">${errs}</td>
+  </tr>`;
+}).join('');
+
+function toggleSessions(){
+  const el = document.getElementById('session-detail');
+  const btn = el.previousElementSibling;
+  el.classList.toggle('open');
+  btn.textContent = el.classList.contains('open') ? 'Hide Session Details' : 'Show Session Details';
+}
 </script>
 </body>
 </html>'''
@@ -1064,59 +1311,79 @@ def _build_html(analyses, watch_mode=False):
     data_json = json.dumps(serialized, default=str)
     html = _HTML_TEMPLATE.replace("%%DATA%%", data_json)
     if watch_mode:
-        # Inject live-refresh script: fetches /data every 30s, re-renders without full reload
+        # Inject live-refresh script: fetches /data every 30s, re-renders all sections
         refresh_js = """
 <script>
 (function(){
   const INTERVAL = 30000;
-  let _selectedIdx = -1;
-  const origShow = window.showDetail;
-  window.showDetail = function(idx){ _selectedIdx = idx; origShow(idx); };
 
   async function refresh(){
     try {
       const resp = await fetch('/data');
       if (!resp.ok) return;
       const fresh = await resp.json();
-      fresh.sort((a,b) => b.total_cost - a.total_cost);
 
       // Patch global DATA in-place
       DATA.length = 0;
       fresh.forEach(d => DATA.push(d));
 
-      // Re-render summary cards
-      const totalCost2=DATA.reduce((s,d)=>s+d.total_cost,0);
-      const totalAPI2=DATA.reduce((s,d)=>s+d.num_api_calls,0);
-      const totalTools2=DATA.reduce((s,d)=>s+d.num_tool_calls,0);
-      const totalOut2=DATA.reduce((s,d)=>s+d.total_output_tokens,0);
-      const totalCacheRead2=DATA.reduce((s,d)=>s+d.total_cache_read_tokens,0);
-      const totalErrors2=DATA.reduce((s,d)=>s+d.tool_errors.length,0);
-      document.getElementById('gen-time').textContent=new Date().toLocaleString() + '  (live)';
-      document.getElementById('summary-cards').innerHTML=[
-        {label:'Total Cost',value:fc(totalCost2),cls:'cost',detail:DATA.length+' sessions'},
-        {label:'API Calls',value:totalAPI2.toLocaleString(),detail:(totalAPI2/DATA.length).toFixed(0)+' avg/session'},
-        {label:'Tool Calls',value:totalTools2.toLocaleString(),detail:totalErrors2+' errors ('+(totalTools2?(100*totalErrors2/totalTools2).toFixed(0):0)+'%)'},
-        {label:'Output Tokens',value:ft(totalOut2),detail:fc(totalOut2/1e6*25)+' at Opus rates'},
-        {label:'Cache Read',value:ft(totalCacheRead2),detail:'Saved ~'+fc(totalCacheRead2/1e6*5*0.9)+' vs uncached'},
+      // Re-aggregate projects
+      const projMap2 = {};
+      DATA.forEach(s => {
+        const name = projectLabel(s.project||'');
+        if(!projMap2[name]) projMap2[name] = { cost:0, sessions:0, messages:0, errors:0 };
+        projMap2[name].cost += s.total_cost;
+        projMap2[name].sessions += 1;
+        projMap2[name].messages += s.num_user_messages || 0;
+        projMap2[name].errors += (s.tool_errors||[]).length;
+      });
+      const projects2 = Object.entries(projMap2).map(([name,d])=>({name,...d})).sort((a,b)=>b.cost-a.cost);
+      const maxProjCost2 = projects2[0]?.cost || 1;
+
+      // Totals
+      const totalCost2 = DATA.reduce((s,d)=>s+d.total_cost,0);
+      const totalSessions2 = DATA.length;
+      const totalMessages2 = DATA.reduce((s,d)=>s+(d.num_user_messages||0),0);
+      const avgCost2 = totalSessions2 ? totalCost2/totalSessions2 : 0;
+      const today2 = new Date().toISOString().slice(0,10);
+      const todaySpend2 = DATA.filter(s=>(s.start_time||'').startsWith(today2)).reduce((s,d)=>s+d.total_cost,0);
+
+      // Header
+      document.getElementById('total-spend').textContent = fc(totalCost2);
+      const dates2 = DATA.map(s=>s.start_time).filter(Boolean).sort();
+      document.getElementById('date-range').textContent = (dates2.length ? fdate(dates2[0])+' to '+fdate(dates2[dates2.length-1]) : '');
+      document.getElementById('last-refreshed').textContent = 'Last refreshed: ' + new Date().toLocaleString() + '  (live)';
+
+      // Summary cards
+      document.getElementById('summary-cards').innerHTML = [
+        { label:'Total Spend', value:fc(totalCost2), cls:'cost', detail:totalSessions2+' sessions' },
+        { label:"Today's Spend", value:fc(todaySpend2), cls:todaySpend2>10?'cost-red':todaySpend2>3?'cost-yellow':'cost-green', detail:today2 },
+        { label:'Messages Sent', value:totalMessages2.toLocaleString(), detail:(totalSessions2?(totalMessages2/totalSessions2).toFixed(0):'0')+' avg/session' },
+        { label:'Avg Cost/Session', value:fc(avgCost2), cls:avgCost2>10?'cost-red':avgCost2>5?'cost-yellow':'cost-green', detail:'across '+totalSessions2+' sessions' },
       ].map(c=>`<div class="card"><div class="card-label">${c.label}</div><div class="card-value ${c.cls||''}">${c.value}</div><div class="card-detail">${c.detail}</div></div>`).join('');
 
-      // Re-render session list
-      const maxCost2=DATA[0]?.total_cost||1;
-      document.getElementById('sessions-list').innerHTML=DATA.map((s,i)=>{
-        const errs=s.tool_errors.length;const pct=((s.total_cost/maxCost2)*100).toFixed(0);
-        return`<div class="session-card${i===_selectedIdx?' active':''}" onclick="showDetail(${i})" id="scard-${i}">
-          <div class="session-header"><div><div class="session-id">${s.session_id?.slice(0,8)||'?'}...</div><div class="session-project">${projectLabel(s.project||'?')}</div></div><div class="session-cost">${fc(s.total_cost)}</div></div>
-          <div style="margin-bottom:8px"><div class="bar-container"><div class="bar" style="width:${pct}%;background:${s.total_cost>5?'var(--red)':s.total_cost>1?'var(--yellow)':'var(--green)'}"></div><span class="bar-label">${ft(s.total_output_tokens)} output</span></div></div>
-          <div class="session-meta"><span>${s.num_api_calls} API calls</span><span>${s.num_tool_calls} tools</span>${errs?'<span style="color:var(--red)">'+errs+' errors</span>':''}<span class="timestamp">${ftime(s.start_time)}</span></div>
-        </div>`}).join('');
+      // Project table
+      document.getElementById('project-table').innerHTML = projects2.map(p=>{
+        const pct = ((p.cost/maxProjCost2)*100).toFixed(0);
+        return `<tr><td><strong>${p.name}</strong></td><td class="right ${costColor(p.cost)}" style="font-weight:600">${fc(p.cost)}</td><td class="right">${p.sessions}</td><td class="right">${p.messages}</td><td class="bar-cell"><div class="bar-wrap"><div class="bar" style="width:${pct}%;background:${barColor(p.cost)}"></div><span class="bar-pct">${((p.cost/totalCost2)*100).toFixed(0)}%</span></div></td></tr>`;
+      }).join('');
 
-      // Re-render table
-      document.getElementById('sessions-table').innerHTML=DATA.map(s=>{
-        const errs=s.tool_errors.length;
-        return`<tr><td><span class="session-id">${s.session_id?.slice(0,12)||'?'}...</span></td><td style="color:var(--dim);font-size:13px">${projectLabel(s.project||'?')}</td><td class="right cost">${fc(s.total_cost)}</td><td class="right">${s.num_api_calls}</td><td class="right">${s.num_tool_calls}</td><td class="right" style="color:${errs?'var(--red)':'var(--dim)'}">${errs}</td><td class="right">${ft(s.total_output_tokens)}</td><td class="timestamp">${ftime(s.start_time)}</td></tr>`}).join('');
+      // Timeline table (respects active tab)
+      renderTimeline();
 
-      // Re-render detail if one is selected
-      if (_selectedIdx >= 0 && _selectedIdx < DATA.length) showDetail(_selectedIdx);
+      // Session table
+      DATA.sort((a,b)=>b.total_cost-a.total_cost);
+      document.getElementById('sessions-table').innerHTML = DATA.map(s=>{
+        const errs = (s.tool_errors||[]).length;
+        const models = (s.models||[]).join(', ') || '?';
+        return `<tr><td>${projectLabel(s.project||'')}</td><td class="timestamp">${ftime(s.start_time)}</td><td class="right ${costColor(s.total_cost)}" style="font-weight:600">${fc(s.total_cost)}</td><td style="font-size:13px;color:var(--dim)">${models}</td><td class="right">${s.num_user_messages||0}</td><td class="right">${s.num_tool_calls}</td><td class="right" style="color:${errs?'var(--red)':'var(--dim)'}">${errs}</td></tr>`;
+      }).join('');
+
+      // Recommendations
+      const allRecs2 = generateAllRecs();
+      document.getElementById('recommendations').innerHTML = allRecs2.length
+        ? allRecs2.map(r=>`<div class="rec-item ${r.severity}"><div class="rec-title">${r.title}</div><div class="rec-detail">${r.detail}</div></div>`).join('')
+        : '<div class="no-recs">Looking good! No optimization issues found.</div>';
     } catch(e) { console.warn('refresh failed', e); }
   }
   setInterval(refresh, INTERVAL);
@@ -1124,6 +1391,23 @@ def _build_html(analyses, watch_mode=False):
 </script>"""
         html = html.replace("</body>", refresh_js + "\n</body>")
     return html
+
+
+def _publish_html(analyses):
+    """Generate docs/index.html for GitHub Pages deployment."""
+    html = _build_html(analyses, watch_mode=False)
+    # Find the repo root (where .git lives)
+    repo_root = Path(__file__).resolve().parent
+    while repo_root != repo_root.parent:
+        if (repo_root / ".git").exists():
+            break
+        repo_root = repo_root.parent
+    docs_dir = repo_root / "docs"
+    docs_dir.mkdir(exist_ok=True)
+    out_path = docs_dir / "index.html"
+    out_path.write_text(html, encoding="utf-8")
+    print(f"Published dashboard to {out_path}", file=sys.stderr)
+    print(f"Commit & push, then enable GitHub Pages (source: /docs on main).", file=sys.stderr)
 
 
 def _generate_html(analyses):
