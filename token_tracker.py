@@ -110,6 +110,19 @@ def _load_subscriptions():
         return []
 
 
+def _load_budgets():
+    """Load budget thresholds from subscriptions.json."""
+    sub_path = Path(__file__).resolve().parent / "subscriptions.json"
+    if not sub_path.exists():
+        return {}
+    try:
+        with open(sub_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("budgets", {})
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
 def _load_usage_log():
     """Load manual usage log from usage_log.json beside this script."""
     log_path = Path(__file__).resolve().parent / "usage_log.json"
@@ -121,6 +134,72 @@ def _load_usage_log():
         return data.get("usage", [])
     except (json.JSONDecodeError, OSError):
         return []
+
+
+def _save_usage_log(entries):
+    """Write usage entries back to usage_log.json."""
+    log_path = Path(__file__).resolve().parent / "usage_log.json"
+    with open(log_path, "w", encoding="utf-8") as f:
+        json.dump({"usage": entries}, f, indent=2, default=str)
+
+
+def _sync_usage(analyses):
+    """Auto-populate Claude Code entries in usage_log.json from JSONL session data."""
+    # Aggregate Claude costs by month
+    monthly = defaultdict(lambda: {"cost": 0.0, "sessions": 0, "models": set()})
+    for a in analyses:
+        ts = a.get("start_time")
+        if not ts:
+            continue
+        month = ts[:7]  # "YYYY-MM"
+        monthly[month]["cost"] += a["total_cost"]
+        monthly[month]["sessions"] += 1
+        for m in a.get("models", []):
+            if m and not m.startswith("<"):
+                monthly[month]["models"].add(m)
+
+    # Load existing usage log
+    existing = _load_usage_log()
+
+    # Load subscriptions to get Claude base cost
+    subs = _load_subscriptions()
+    claude_sub = next((s for s in subs if "anthropic" in s.get("name", "").lower()
+                       or "claude" in s.get("name", "").lower()), None)
+    base_cost = claude_sub["cost"] if claude_sub else 0.0
+
+    # Build index of existing Claude entries by month
+    claude_idx = {}
+    for i, entry in enumerate(existing):
+        svc = entry.get("service", "")
+        if "claude" in svc.lower() or "anthropic" in svc.lower():
+            claude_idx[entry.get("month")] = i
+
+    updated = 0
+    added = 0
+    for month in sorted(monthly.keys()):
+        info = monthly[month]
+        models_str = ", ".join(sorted(info["models"])) if info["models"] else "unknown"
+        overage = max(0, info["cost"] - base_cost)
+        note = f"{info['sessions']} sessions, {models_str}. Auto-synced from JSONL."
+
+        entry = {
+            "month": month,
+            "service": "Anthropic (Claude Code)",
+            "category": "LLM",
+            "cost_base": base_cost,
+            "cost_overage": round(overage, 2),
+            "note": note,
+        }
+
+        if month in claude_idx:
+            existing[claude_idx[month]] = entry
+            updated += 1
+        else:
+            existing.append(entry)
+            added += 1
+
+    _save_usage_log(existing)
+    print(f"Synced Claude usage: {added} months added, {updated} months updated.", file=sys.stderr)
 
 
 def _get_pricing(model_name):
@@ -846,6 +925,7 @@ examples:
   %(prog)s --html                   Open interactive dashboard in browser
   %(prog)s --watch                  Live dashboard (auto-refreshes every 30s)
   %(prog)s --publish                Generate docs/index.html for GitHub Pages
+  %(prog)s --sync-usage             Auto-populate Claude entries in usage_log.json
 """,
     )
     parser.add_argument("-s", "--session",       help="Analyze a specific session by UUID")
@@ -858,6 +938,7 @@ examples:
     parser.add_argument("--html",                action="store_true", help="Open interactive dashboard in browser")
     parser.add_argument("--watch",               action="store_true", help="Live dashboard with auto-refresh (implies --html)")
     parser.add_argument("--publish",             action="store_true", help="Generate docs/index.html for GitHub Pages")
+    parser.add_argument("--sync-usage",           action="store_true", help="Auto-populate Claude entries in usage_log.json from JSONL data")
     parser.add_argument("--no-color",            action="store_true", help="Disable colored output")
     args = parser.parse_args()
 
@@ -870,6 +951,22 @@ examples:
     if not scanner.base_dir.exists():
         print(red(f"Error: {scanner.base_dir} not found. Is Claude Code installed?"), file=sys.stderr)
         sys.exit(1)
+
+    # ── Sync usage log ────────────────────────────────────────────────────
+    if args.sync_usage:
+        sessions = scanner.list_sessions()
+        print(dim(f"Scanning {len(sessions)} session(s)..."), file=sys.stderr)
+        analyses = []
+        for fp in sessions:
+            try:
+                d = parse_session(fp)
+                a = analyze_session(d)
+                if a["num_api_calls"] > 0:
+                    analyses.append(a)
+            except Exception:
+                pass
+        _sync_usage(analyses)
+        return
 
     # ── Watch mode (live server) ──────────────────────────────────────────
     if args.watch:
@@ -1040,6 +1137,14 @@ _HTML_TEMPLATE = r'''<!DOCTYPE html>
   .strip-value { font-size: 18px; font-weight: 700; margin-top: 2px; }
   .strip-detail { color: var(--dim); font-size: 11px; }
 
+  /* Budget bars */
+  .budget-strip { display: flex; gap: 16px; padding: 8px 24px; background: var(--bg2); border-bottom: 1px solid var(--border); flex-shrink: 0; overflow-x: auto; }
+  .budget-item { flex: 1; min-width: 200px; }
+  .budget-label { font-size: 11px; color: var(--dim); margin-bottom: 3px; display: flex; justify-content: space-between; }
+  .budget-track { height: 6px; background: var(--bg3); border-radius: 3px; overflow: hidden; position: relative; }
+  .budget-fill { height: 100%; border-radius: 3px; transition: width 0.3s ease; }
+  .budget-alert { font-size: 10px; color: var(--red); font-weight: 600; margin-top: 2px; }
+
   /* Main nav tabs */
   .nav-bar { display: flex; gap: 0; border-bottom: 1px solid var(--border); flex-shrink: 0; background: var(--bg); padding: 0 24px; }
   .nav-tab { padding: 10px 20px; cursor: pointer; font-size: 13px; font-weight: 500; color: var(--dim); border-bottom: 2px solid transparent; transition: all 0.15s; }
@@ -1151,6 +1256,7 @@ _HTML_TEMPLATE = r'''<!DOCTYPE html>
 
 <!-- Summary strip -->
 <div class="summary-strip" id="summary-cards"></div>
+<div class="budget-strip" id="budget-bars"></div>
 
 <!-- Navigation tabs + date filter -->
 <div class="nav-bar">
@@ -1286,6 +1392,7 @@ _HTML_TEMPLATE = r'''<!DOCTYPE html>
 const DATA = %%DATA%%;
 const SUBS = %%SUBS%%;
 const USAGE_LOG = %%USAGE%%;
+const BUDGETS = %%BUDGETS%%;
 
 /* ── Helpers ── */
 function fc(c){ if(c<0) return '-$'+(-c).toFixed(2); return c<0.01&&c>0 ? '<$0.01' : '$'+c.toFixed(2); }
@@ -1402,6 +1509,55 @@ function renderSummaryCards(data){
     { label:"Today", value:fc(todaySpend), cls:todaySpend>10?'cost-red':todaySpend>3?'cost-yellow':'cost-green', detail:today },
     { label:'Avg/Session', value:fc(avgCost), cls:avgCost>10?'cost-red':avgCost>5?'cost-yellow':'cost-green', detail:totalSessions+' sessions' },
   ].map(c=>`<div class="strip-card"><div class="strip-label">${c.label}</div><div class="strip-value ${c.cls||''}">${c.value}</div><div class="strip-detail">${c.detail}</div></div>`).join('');
+}
+
+function renderBudgetBars(data){
+  const el = document.getElementById('budget-bars');
+  if(!BUDGETS || !Object.keys(BUDGETS).length){ el.style.display='none'; return; }
+  el.style.display='';
+  const now = new Date();
+  const cm = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+  const today = now.toISOString().slice(0,10);
+  const dayOfMonth = now.getDate();
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
+  const alertPct = BUDGETS.alert_threshold_pct || 80;
+
+  const cmTokenCost = data.filter(s=>(s.start_time||'').startsWith(cm)).reduce((s,d)=>s+d.total_cost,0);
+  const todayCost = data.filter(s=>(s.start_time||'').startsWith(today)).reduce((s,d)=>s+d.total_cost,0);
+  const monthlySub = totalMonthlySub();
+  const otherAI = USAGE_LOG.filter(u=>u.month===cm && !(u.service||'').includes('Claude')).reduce((s,u)=>s+(u.cost_base||0)+(u.cost_overage||0),0);
+  const allIn = cmTokenCost + otherAI + monthlySub;
+
+  const bars = [];
+
+  if(BUDGETS.monthly_total){
+    const pct = Math.min(100, (allIn/BUDGETS.monthly_total)*100);
+    const color = pct>=100?'var(--red)':pct>=alertPct?'var(--yellow)':'var(--green)';
+    const projected = (allIn / dayOfMonth) * daysInMonth;
+    let alert = '';
+    if(pct>=100) alert = 'OVER BUDGET';
+    else if(pct>=alertPct) alert = 'Approaching limit';
+    else if(projected > BUDGETS.monthly_total) alert = 'Projected: '+fc(projected)+' (over)';
+    bars.push({label:'Monthly Total', spent:allIn, budget:BUDGETS.monthly_total, pct, color, alert});
+  }
+  if(BUDGETS.monthly_claude){
+    const pct = Math.min(100, (cmTokenCost/BUDGETS.monthly_claude)*100);
+    const color = pct>=100?'var(--red)':pct>=alertPct?'var(--yellow)':'var(--green)';
+    let alert = '';
+    if(pct>=100) alert = 'OVER BUDGET';
+    else if(pct>=alertPct) alert = 'Approaching limit';
+    bars.push({label:'Claude Tokens', spent:cmTokenCost, budget:BUDGETS.monthly_claude, pct, color, alert});
+  }
+  if(BUDGETS.daily_claude){
+    const pct = Math.min(100, (todayCost/BUDGETS.daily_claude)*100);
+    const color = pct>=100?'var(--red)':pct>=alertPct?'var(--yellow)':'var(--green)';
+    let alert = '';
+    if(pct>=100) alert = 'DAILY LIMIT HIT';
+    else if(pct>=alertPct) alert = 'Approaching daily limit';
+    bars.push({label:'Today (Claude)', spent:todayCost, budget:BUDGETS.daily_claude, pct, color, alert});
+  }
+
+  el.innerHTML = bars.map(b=>`<div class="budget-item"><div class="budget-label"><span>${b.label}</span><span>${fc(b.spent)} / ${fc(b.budget)} (${b.pct.toFixed(0)}%)</span></div><div class="budget-track"><div class="budget-fill" style="width:${b.pct}%;background:${b.color}"></div></div>${b.alert?'<div class="budget-alert">'+b.alert+'</div>':''}</div>`).join('');
 }
 
 function renderProjectTable(data){
@@ -1946,6 +2102,7 @@ function renderAll(){
   const data = filteredDATA();
   renderHeader(data);
   renderSummaryCards(data);
+  renderBudgetBars(data);
   renderAllAISpend(data);
   renderMonthlyReport(data);
   renderProjectTable(data);
@@ -2004,6 +2161,8 @@ def _build_html(analyses, watch_mode=False):
     html = _HTML_TEMPLATE.replace("%%DATA%%", data_json)
     html = html.replace("%%SUBS%%", subs_json)
     html = html.replace("%%USAGE%%", usage_json)
+    budgets_json = json.dumps(_load_budgets(), default=str)
+    html = html.replace("%%BUDGETS%%", budgets_json)
     if watch_mode:
         # Inject live-refresh script: fetches /data every 30s, re-renders all sections
         refresh_js = """

@@ -56,5 +56,11 @@
       "start_date": "2025-02-01",
       "note": "Free tier. Update cost if on paid plan."
     }
-  ]
+  ],
+  "budgets": {
+    "monthly_total": 2500,
+    "monthly_claude": 2000,
+    "daily_claude": 100,
+    "alert_threshold_pct": 80
+  }
 }

@@ -6,41 +6,81 @@
       "category": "LLM",
       "credits_used": 80755,
       "credits_total": 85000,
-      "cost_base": 200.00,
-      "cost_overage": 0.00,
+      "cost_base": 200.0,
+      "cost_overage": 0.0,
       "note": "10K plan + 40K purchased + 35K bonus. 4 threads used 67% of credits."
     },
     {
       "month": "2026-03",
       "service": "Anthropic (Claude Code)",
       "category": "LLM",
-      "cost_base": 30.00,
-      "cost_overage": 1870.97,
-      "note": "Team plan + auto-recharge. 108 sessions, all claude-opus-4-6."
+      "cost_base": 30.0,
+      "cost_overage": 1728.34,
+      "note": "69 sessions, claude-opus-4-6, claude-sonnet-4-6. Auto-synced from JSONL."
     },
     {
       "month": "2026-03",
       "service": "Make.com",
       "category": "Automation",
       "cost_base": 34.12,
-      "cost_overage": 0.00,
+      "cost_overage": 0.0,
       "note": "Pro plan 20K ops"
     },
     {
       "month": "2026-03",
       "service": "Firecrawl",
       "category": "Tooling",
-      "cost_base": 19.00,
-      "cost_overage": 0.00,
+      "cost_base": 19.0,
+      "cost_overage": 0.0,
       "note": "Hobby plan"
     },
     {
       "month": "2026-03",
       "service": "ChatGPT Plus",
       "category": "LLM",
-      "cost_base": 20.00,
-      "cost_overage": 0.00,
+      "cost_base": 20.0,
+      "cost_overage": 0.0,
       "note": "Estimated - verify from personal email/credit card"
+    },
+    {
+      "month": "2026-04",
+      "service": "Anthropic (Claude Code)",
+      "category": "LLM",
+      "cost_base": 30.0,
+      "cost_overage": 79.1,
+      "note": "25 sessions, claude-opus-4-6. Auto-synced from JSONL."
+    },
+    {
+      "month": "2026-04",
+      "service": "Perplexity Max",
+      "category": "LLM",
+      "cost_base": 200.0,
+      "cost_overage": 0.0,
+      "note": "Estimated from subscription. Update with actual credits at month end."
+    },
+    {
+      "month": "2026-04",
+      "service": "ChatGPT Plus",
+      "category": "LLM",
+      "cost_base": 20.0,
+      "cost_overage": 0.0,
+      "note": "Estimated from subscription."
+    },
+    {
+      "month": "2026-04",
+      "service": "Make.com",
+      "category": "Automation",
+      "cost_base": 34.12,
+      "cost_overage": 0.0,
+      "note": "Pro plan 20K ops"
+    },
+    {
+      "month": "2026-04",
+      "service": "Firecrawl",
+      "category": "Tooling",
+      "cost_base": 19.0,
+      "cost_overage": 0.0,
+      "note": "Hobby plan"
     }
   ]
 }

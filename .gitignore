@@ -1,3 +1,6 @@
 .claude/
 _ul
 usage.txt
+__pycache__/
+*.pyc
+*.pyo
