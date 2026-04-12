@@ -47,7 +47,7 @@
       "service": "Anthropic (Claude Code)",
       "category": "LLM",
       "cost_base": 30.0,
-      "cost_overage": 79.1,
+      "cost_overage": 83.36,
       "note": "25 sessions, claude-opus-4-6. Auto-synced from JSONL."
     },
     {

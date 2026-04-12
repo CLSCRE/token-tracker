@@ -1062,6 +1062,7 @@ examples:
         return
 
     if args.publish:
+        _sync_usage(analyses)
         _publish_html(analyses)
         return
 
@@ -1290,6 +1291,10 @@ _HTML_TEMPLATE = r'''<!DOCTYPE html>
     </div>
   </div>
   <div class="section">
+    <div class="section-title">Daily Spend — Current Month</div>
+    <div id="daily-chart" style="display:flex;align-items:flex-end;gap:2px;height:120px;padding:8px 0"></div>
+  </div>
+  <div class="section">
     <div class="section-title">Monthly Report</div>
     <table>
       <thead><tr><th>Month</th><th class="right">Claude Tokens</th><th class="right">Other AI</th><th class="right">Subs</th><th class="right">Total</th><th class="bar-cell"></th></tr></thead>
@@ -1358,6 +1363,10 @@ _HTML_TEMPLATE = r'''<!DOCTYPE html>
 <!-- ═══ Tab: Sessions ═══ -->
 <div class="tab-panel" id="panel-sessions">
   <div class="section">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+      <input type="text" id="session-search" placeholder="Search sessions by project, model, or ID..." style="flex:1;padding:6px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:13px;outline:none" />
+      <button class="filter-btn" id="export-sessions-csv">Export CSV</button>
+    </div>
     <table>
       <thead><tr><th>Project</th><th>Time</th><th class="right">Cost</th><th>Model</th><th class="right">Msgs</th><th class="right">Tools</th><th class="right">Errors</th></tr></thead>
       <tbody id="sessions-table"></tbody>
@@ -1684,6 +1693,39 @@ function renderAllAISpend(data){
   document.getElementById('all-ai-footer').innerHTML = `<tr><td colspan="4"><strong>Total AI Spend (${fmonth(currentMonth)})</strong></td><td class="right cost-red" style="font-weight:700;font-size:16px">${fc(grandTotal)}</td><td></td></tr>`;
 }
 
+function renderDailyChart(data){
+  const el = document.getElementById('daily-chart');
+  const now = new Date();
+  const cm = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
+  const dayOfMonth = now.getDate();
+
+  // Aggregate cost per day
+  const daily = {};
+  for(let d=1;d<=daysInMonth;d++) daily[d]=0;
+  data.filter(s=>(s.start_time||'').startsWith(cm)).forEach(s=>{
+    const day = parseInt(s.start_time.slice(8,10));
+    daily[day] = (daily[day]||0) + s.total_cost;
+  });
+
+  const maxCost = Math.max(...Object.values(daily), 1);
+  const dailyBudget = BUDGETS.daily_claude || 0;
+
+  el.innerHTML = Array.from({length:daysInMonth}, (_,i)=>{
+    const d = i+1;
+    const cost = daily[d]||0;
+    const h = Math.max(1, (cost/maxCost)*100);
+    const isFuture = d > dayOfMonth;
+    const isToday = d === dayOfMonth;
+    const overBudget = dailyBudget && cost > dailyBudget;
+    const color = isFuture ? 'var(--bg3)' : overBudget ? 'var(--red)' : isToday ? 'var(--blue)' : cost>0 ? 'var(--green)' : 'var(--bg3)';
+    const title = isFuture ? 'Day '+d : 'Day '+d+': '+fc(cost);
+    return `<div title="${title}" style="flex:1;min-width:0;height:${isFuture?'2':h}%;background:${color};border-radius:2px 2px 0 0;transition:height 0.3s;opacity:${isFuture?0.3:1}"></div>`;
+  }).join('')
+  + (dailyBudget ? `<div style="position:absolute;left:0;right:0;bottom:${Math.max(1,(dailyBudget/maxCost)*100)}%;border-top:1px dashed var(--yellow);pointer-events:none"><span style="position:absolute;right:4px;top:-14px;font-size:10px;color:var(--yellow)">budget ${fc(dailyBudget)}</span></div>` : '');
+  el.style.position = 'relative';
+}
+
 function renderMonthlyReport(data){
   const allDates = data.map(s=>s.start_time).filter(Boolean).sort();
   if(allDates.length === 0){ document.getElementById('monthly-report-table').innerHTML=''; document.getElementById('monthly-report-footer').innerHTML=''; return; }
@@ -1938,13 +1980,29 @@ function renderInsights(data){
     : '<div class="no-recs">Looking good! No optimization issues found.</div>';
 }
 
+let _sessionData = [];
 function renderSessionTable(data){
-  const sorted = [...data].sort((a,b)=>b.total_cost-a.total_cost);
-  document.getElementById('sessions-table').innerHTML = sorted.map(s=>{
+  _sessionData = [...data].sort((a,b)=>b.total_cost-a.total_cost);
+  filterSessionTable();
+}
+function filterSessionTable(){
+  const q = (document.getElementById('session-search')?.value||'').toLowerCase();
+  const rows = _sessionData.filter(s=>{
+    if(!q) return true;
+    const proj = projectLabel(s.project||'').toLowerCase();
+    const models = (s.models||[]).join(' ').toLowerCase();
+    const sid = (s.session_id||'').toLowerCase();
+    return proj.includes(q) || models.includes(q) || sid.includes(q);
+  });
+  document.getElementById('sessions-table').innerHTML = rows.map(s=>{
     const errs = (s.tool_errors||[]).length;
     const models = (s.models||[]).join(', ') || '?';
-    return `<tr><td>${esc(projectLabel(s.project||''))}</td><td class="timestamp">${ftime(s.start_time)}</td><td class="right ${costColor(s.total_cost)}" style="font-weight:600">${fc(s.total_cost)}</td><td style="font-size:13px;color:var(--dim)">${esc(models)}</td><td class="right">${s.num_user_messages||0}</td><td class="right">${s.num_tool_calls}</td><td class="right" style="color:${errs?'var(--red)':'var(--dim)'}">${errs}</td></tr>`;
+    return `<tr class="session-row" data-sid="${s.session_id||''}" style="cursor:pointer"><td>${esc(projectLabel(s.project||''))}</td><td class="timestamp">${ftime(s.start_time)}</td><td class="right ${costColor(s.total_cost)}" style="font-weight:600">${fc(s.total_cost)}</td><td style="font-size:13px;color:var(--dim)">${esc(models)}</td><td class="right">${s.num_user_messages||0}</td><td class="right">${s.num_tool_calls}</td><td class="right" style="color:${errs?'var(--red)':'var(--dim)'}">${errs}</td></tr>`;
   }).join('');
+  // Bind click handlers for drilldown
+  document.querySelectorAll('.session-row').forEach(row=>{
+    row.addEventListener('click', ()=>showSessionDetail(row.dataset.sid));
+  });
 }
 
 /* ── Usage log table ── */
@@ -2104,6 +2162,7 @@ function renderAll(){
   renderSummaryCards(data);
   renderBudgetBars(data);
   renderAllAISpend(data);
+  renderDailyChart(data);
   renderMonthlyReport(data);
   renderProjectTable(data);
   renderModelTable(data);
@@ -2144,6 +2203,78 @@ function setTimelineMode(mode){
     renderAll();
   });
 })();
+
+/* ── Session search ── */
+document.getElementById('session-search')?.addEventListener('input', filterSessionTable);
+
+/* ── CSV export ── */
+function downloadCSV(filename, rows){
+  const csv = rows.map(r=>r.map(c=>'"'+String(c??'').replace(/"/g,'""')+'"').join(',')).join('\n');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=filename; a.click();
+}
+document.getElementById('export-sessions-csv')?.addEventListener('click', ()=>{
+  const hdr = ['Project','Time','Cost','Model','Messages','Tools','Errors','Session ID'];
+  const rows = [hdr, ..._sessionData.map(s=>[
+    projectLabel(s.project||''), s.start_time||'', s.total_cost.toFixed(2),
+    (s.models||[]).join(', '), s.num_user_messages||0, s.num_tool_calls,
+    (s.tool_errors||[]).length, s.session_id||''
+  ])];
+  downloadCSV('sessions_export.csv', rows);
+});
+
+/* ── Session detail modal ── */
+function showSessionDetail(sid){
+  const s = DATA.find(d=>d.session_id===sid);
+  if(!s) return;
+  const existing = document.getElementById('session-modal');
+  if(existing) existing.remove();
+
+  const errs = (s.tool_errors||[]).length;
+  const models = (s.models||[]).join(', ') || '?';
+  const toolCounts = s.tool_call_counts||{};
+  const toolRows = Object.entries(toolCounts).sort((a,b)=>b[1]-a[1]);
+  const dur = s.session_duration_min ? s.session_duration_min.toFixed(1)+' min' : '\u2014';
+  const largeResults = (s.large_results||[]).length;
+  const dupes = (s.duplicate_tools||[]);
+
+  const modal = document.createElement('div');
+  modal.id = 'session-modal';
+  modal.style.cssText = 'position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6)';
+  modal.innerHTML = `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;max-width:700px;width:90%;max-height:80vh;overflow-y:auto;padding:24px;position:relative">
+    <button onclick="document.getElementById('session-modal').remove()" style="position:absolute;top:12px;right:16px;background:none;border:none;color:var(--dim);font-size:20px;cursor:pointer">\u2715</button>
+    <h3 style="margin:0 0 4px;color:var(--text);font-size:16px">${esc(projectLabel(s.project||''))}</h3>
+    <div style="color:var(--dim);font-size:12px;margin-bottom:16px">${esc(sid)}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px">
+      <div class="strip-card" style="border:1px solid var(--border);border-radius:4px"><div class="strip-label">Cost</div><div class="strip-value ${costColor(s.total_cost)}">${fc(s.total_cost)}</div></div>
+      <div class="strip-card" style="border:1px solid var(--border);border-radius:4px"><div class="strip-label">Duration</div><div class="strip-value" style="font-size:16px">${dur}</div></div>
+      <div class="strip-card" style="border:1px solid var(--border);border-radius:4px"><div class="strip-label">Messages</div><div class="strip-value" style="font-size:16px">${s.num_user_messages||0}</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div>
+        <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:var(--text)">Token Breakdown</div>
+        <table style="width:100%">
+          <tr><td style="color:var(--dim)">Input</td><td class="right">${ft(s.total_input_tokens||0)}</td></tr>
+          <tr><td style="color:var(--dim)">Cache Write</td><td class="right">${ft(s.total_cache_write_tokens||0)}</td></tr>
+          <tr><td style="color:var(--dim)">Cache Read</td><td class="right">${ft(s.total_cache_read_tokens||0)}</td></tr>
+          <tr><td style="color:var(--dim)">Output</td><td class="right">${ft(s.total_output_tokens||0)}</td></tr>
+        </table>
+      </div>
+      <div>
+        <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:var(--text)">Tool Calls (${s.num_tool_calls})</div>
+        <table style="width:100%">
+          ${toolRows.slice(0,10).map(([t,c])=>'<tr><td style="color:var(--dim)">'+esc(t)+'</td><td class="right">'+c+'</td></tr>').join('')}
+        </table>
+      </div>
+    </div>
+    ${errs?'<div style="margin-top:12px;padding:8px;background:rgba(255,85,85,0.1);border-radius:4px;font-size:12px;color:var(--red)"><strong>'+errs+' error(s)</strong> \u2014 '+s.tool_errors.map(e=>esc(e.name)).join(', ')+'</div>':''}
+    ${dupes.length?'<div style="margin-top:8px;padding:8px;background:rgba(255,200,50,0.1);border-radius:4px;font-size:12px;color:var(--yellow)"><strong>Duplicate calls:</strong> '+dupes.map(d=>esc(d.tool)+' ('+d.count+'x)').join(', ')+'</div>':''}
+    ${largeResults?'<div style="margin-top:8px;font-size:12px;color:var(--dim)">'+largeResults+' large result(s) (>10K chars)</div>':''}
+    <div style="margin-top:12px;font-size:12px;color:var(--dim)">Model: ${esc(models)} &middot; API calls: ${s.num_api_calls} &middot; ${ftime(s.start_time)} \u2192 ${ftime(s.end_time)}</div>
+  </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener('click', e=>{ if(e.target===modal) modal.remove(); });
+}
 
 /* ── Initial render ── */
 renderAll();
