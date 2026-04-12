@@ -1,0 +1,46 @@
+{
+  "usage": [
+    {
+      "month": "2026-03",
+      "service": "Perplexity Max",
+      "category": "LLM",
+      "credits_used": 80755,
+      "credits_total": 85000,
+      "cost_base": 200.00,
+      "cost_overage": 0.00,
+      "note": "10K plan + 40K purchased + 35K bonus. 4 threads used 67% of credits."
+    },
+    {
+      "month": "2026-03",
+      "service": "Anthropic (Claude Code)",
+      "category": "LLM",
+      "cost_base": 30.00,
+      "cost_overage": 1870.97,
+      "note": "Team plan + auto-recharge. 108 sessions, all claude-opus-4-6."
+    },
+    {
+      "month": "2026-03",
+      "service": "Make.com",
+      "category": "Automation",
+      "cost_base": 34.12,
+      "cost_overage": 0.00,
+      "note": "Pro plan 20K ops"
+    },
+    {
+      "month": "2026-03",
+      "service": "Firecrawl",
+      "category": "Tooling",
+      "cost_base": 19.00,
+      "cost_overage": 0.00,
+      "note": "Hobby plan"
+    },
+    {
+      "month": "2026-03",
+      "service": "ChatGPT Plus",
+      "category": "LLM",
+      "cost_base": 20.00,
+      "cost_overage": 0.00,
+      "note": "Estimated - verify from personal email/credit card"
+    }
+  ]
+}

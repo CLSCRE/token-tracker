@@ -1,0 +1,60 @@
+{
+  "subscriptions": [
+    {
+      "name": "Perplexity Max",
+      "cost": 200.00,
+      "billing": "monthly",
+      "category": "LLM",
+      "start_date": "2025-01-01",
+      "note": "Max plan ($200/mo) + purchased credits. 80K+ credits/mo usage. Auto-refill up to $20K/mo limit. HEAVIEST SPEND."
+    },
+    {
+      "name": "Anthropic (Team Plan)",
+      "cost": 30.00,
+      "billing": "monthly",
+      "category": "LLM",
+      "start_date": "2025-02-01",
+      "note": "Team plan base + auto-recharge usage (variable). Receipts at trevor@clscre.com"
+    },
+    {
+      "name": "ChatGPT Plus",
+      "cost": 20.00,
+      "billing": "monthly",
+      "category": "LLM",
+      "start_date": "2025-01-01",
+      "note": "Check personal email or credit card for actual plan/cost"
+    },
+    {
+      "name": "Make.com (Pro)",
+      "cost": 34.12,
+      "billing": "monthly",
+      "category": "Automation",
+      "start_date": "2025-02-01",
+      "note": "Pro plan 20K ops - confirmed $34.12/mo (billed as Celonis Inc.)"
+    },
+    {
+      "name": "Firecrawl",
+      "cost": 19.00,
+      "billing": "monthly",
+      "category": "Tooling",
+      "start_date": "2025-03-01",
+      "note": "Hobby plan - confirmed $19/mo"
+    },
+    {
+      "name": "HeyGen",
+      "cost": 0.00,
+      "billing": "monthly",
+      "category": "Video",
+      "start_date": "2025-03-21",
+      "note": "Free Creator plan. Update if you upgrade."
+    },
+    {
+      "name": "Apollo.io",
+      "cost": 0.00,
+      "billing": "monthly",
+      "category": "Tooling",
+      "start_date": "2025-02-01",
+      "note": "Free tier. Update cost if on paid plan."
+    }
+  ]
+}
